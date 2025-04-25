@@ -18,7 +18,7 @@ markdown-it-py==2.2.0
 MarkupSafe==2.1.2
 mdurl==0.1.2
 networkx==3.0
-numpy==1.24.2
+numpy
 psycopg2-binary==2.9.5
 Pygments==2.14.0
 rich==13.3.2
