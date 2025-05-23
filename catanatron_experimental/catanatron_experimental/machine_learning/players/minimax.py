@@ -16,7 +16,7 @@ from catanatron_experimental.machine_learning.players.value import (
 
 ALPHABETA_DEFAULT_DEPTH = 2
 MAX_SEARCH_TIME_SECS = 20
-
+TEST = True
 
 class AlphaBetaPlayer(Player):
     """
@@ -84,7 +84,10 @@ class AlphaBetaPlayer(Player):
             + f"(depth={self.depth},value_fn={self.value_fn_builder_name},prunning={self.prunning})"
         )
 
-    def alphabeta(self, game, depth, alpha, beta, deadline, node):
+    def alphabeta(self, game, depth, alpha, beta, deadline, node=None):
+        if node is None:
+            node = DebugStateNode("root", game.state.current_color())
+
         """AlphaBeta MiniMax Algorithm.
 
         NOTE: Sometimes returns a value, sometimes an (action, value). This is
@@ -92,7 +95,9 @@ class AlphaBetaPlayer(Player):
         action=>state would probably need (action, proba, value) as return type.
 
         {'value', 'action'|None if leaf, 'node' }
+
         """
+        
         if depth == 0 or game.winning_color() is not None or time.time() >= deadline:
             value_fn = get_value_fn(
                 self.value_fn_builder_name,
@@ -116,10 +121,8 @@ class AlphaBetaPlayer(Player):
 
                 expected_value = 0
                 for j, (outcome, proba) in enumerate(outcomes):
-                    out_node = DebugStateNode(
-                        f"{node.label} {i} {j}", outcome.state.current_color()
-                    )
-
+                    label = f"{i} {j}" if node is None else f"{node.label} {i} {j}"
+                    out_node = DebugStateNode(label, outcome.state.current_color())
                     result = self.alphabeta(
                         outcome, depth - 1, alpha, beta, deadline, out_node
                     )

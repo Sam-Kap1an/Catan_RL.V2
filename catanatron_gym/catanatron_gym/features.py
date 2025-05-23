@@ -496,10 +496,10 @@ feature_extractors = [
     player_features,
     resource_hand_features,
     # TRANSFERABLE BOARD FEATURES =====
-    # build_production_features(True),
-    # build_production_features(False),
-    # expansion_features,
-    # reachability_features,
+    build_production_features(True),
+    build_production_features(False),
+    expansion_features,
+    reachability_features,
     # RAW BASE-MAP FEATURES =====
     tile_features,
     port_features,
@@ -525,6 +525,31 @@ def create_sample_vector(game, p0_color, features=None):
 
 @functools.lru_cache(4 * 3)
 def get_feature_ordering(
+    num_players=4, map_type: Literal["BASE", "MINI", "TOURNAMENT"] = "BASE"
+):
+    players = [
+        SimplePlayer(Color.RED),
+        SimplePlayer(Color.BLUE),
+        SimplePlayer(Color.WHITE),
+        SimplePlayer(Color.ORANGE),
+    ]
+    players = players[:num_players]
+    game = Game(players, catan_map=build_map(map_type))
+    sample = create_sample(game, players[0].color)
+    return sorted(sample.keys())
+
+
+def create_sample(game, p0_color):
+    record_multichannel= {}
+    record_player_vector = {}
+
+    for extractor in board_feat:
+        record.update(extractor(game, p0_color))
+    return record
+
+
+
+def get_feature_ordering_multimodal(
     num_players=4, map_type: Literal["BASE", "MINI", "TOURNAMENT"] = "BASE"
 ):
     players = [

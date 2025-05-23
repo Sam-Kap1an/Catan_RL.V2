@@ -64,7 +64,7 @@ def run_playouts(action_applied_game_copy, num_playouts):
     else:
         counter = Counter(map(run_playout, params))
     duration = time.time() - start
-    # print(f"{num_playouts} playouts took: {duration}. Results: {counter}")
+    print(f"{num_playouts} playouts took: {duration}. Results: {counter}")
     return counter
 
 

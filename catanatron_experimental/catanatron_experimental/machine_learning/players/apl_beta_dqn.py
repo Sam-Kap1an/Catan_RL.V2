@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import tensorflow as tf
+from catanatron_experimental.machine_learning.players.minimax import AlphaBetaPlayer
 
 from tensorflow.keras.optimizers import Adam
 
@@ -38,7 +39,7 @@ NORMALIZATION_MEAN_PATH = Path(DATA_PATH, "mean.npy")
 NORMALIZATION_VARIANCE_PATH = Path(DATA_PATH, "variance.npy")
 
 # ===== PLAYER STATE (here to allow pickle-serialization of player)
-MODEL_NAME = "online-mcts-dqn-3.0"
+MODEL_NAME = "AB-dqn-4.0"
 MODEL_PATH = str(Path("data/models/", MODEL_NAME))
 MODEL_SINGLETON = None
 DATA_LOGGER = DataLogger(DATA_PATH)
@@ -71,90 +72,19 @@ def get_model():
         MODEL_SINGLETON = model
     return MODEL_SINGLETON
 
-
-# class OnlineMCTSDQNPlayer(Player):
-#     def __init__(self, color):
-#         super().__init__(color)
-#         self.step = 0
-
-#     def decide(self, game: Game, playable_actions):
-#         """
-#         For each move, will run N playouts, get statistics, and save into replay buffer.
-#         Every M decisions, will:
-#             - flush replay buffer to disk (for offline experiments)
-#             - report progress on games thus far to TensorBoard (tf.summary module)
-#             - update model by choosing L random samples from replay buffer
-#                 and train model. do we need stability check? i think not.
-#                 and override model path.
-#         Decision V1 looks like, predict and choose the one that creates biggest
-#             'distance' against enemies. Actually this is the same as maximizing wins.
-#         Decision V2 looks the same as V1, but minimaxed some turns in the future.
-#         """
-#         if len(playable_actions) == 1:  # this avoids imbalance (if policy-learning)
-#             return playable_actions[0]
-
-#         start = time.time()
-
-#         # Run MCTS playouts for each possible action, save results for training.
-#         samples = []
-#         scores = []
-#         print(playable_actions)
-#         for action in playable_actions:
-#             print("Considering", action)
-#             action_applied_game_copy = game.copy()
-#             action_applied_game_copy.execute(action)
-#             sample = create_sample_vector(action_applied_game_copy, self.color)
-#             samples.append(sample)
-
-#             if TRAIN:
-#                 # Save snapshots from the perspective of each player (more training!)
-#                 counter = run_playouts(action_applied_game_copy, NUM_PLAYOUTS)
-#                 mcts_labels = {k: v / NUM_PLAYOUTS for k, v in counter.items()}
-#                 DATA_LOGGER.consume(action_applied_game_copy, mcts_labels)
-
-#                 scores.append(mcts_labels.get(self.color, 0))
-
-#         # TODO: if M step, do all 4 things.
-#         if TRAIN and self.step % FLUSH_EVERY == 0:
-#             self.update_model_and_flush_samples()
-
-#         # scores = get_model().call(tf.convert_to_tensor(samples))
-#         best_idx = np.argmax(scores)
-#         best_action = playable_actions[best_idx]
-
-#         if TRAIN:
-#             print("Decision took:", time.time() - start)
-#         self.step += 1
-#         return best_action
-
-#     def update_model_and_flush_samples(self):
-#         """Trains using NN, and saves to disk"""
-#         global MIN_REPLAY_BUFFER_LENGTH, BATCH_SIZE, MODEL_PATH, OVERWRITE_MODEL
-
-#         samples, board_tensors, labels = DATA_LOGGER.get_replay_buffer()
-#         if len(samples) < MIN_REPLAY_BUFFER_LENGTH:
-#             return
-
-#         # print("Training...")
-#         # model = get_model()
-#         # model.fit(
-#         #     tf.convert_to_tensor(samples),
-#         #     tf.convert_to_tensor(labels),
-#         #     batch_size=BATCH_SIZE,
-#         #     verbose=0,
-#         #     shuffle=True,
-#         # )
-#         # print("DONE training")
-#         # if OVERWRITE_MODEL:
-#         #     model.save(MODEL_PATH)
-
-#         DATA_LOGGER.flush()
-
-
 EPSILON = 0.1
 GAMMA = 0.99  # Discount factor
 
-class OnlineMCTSDQNPlayer_1(Player):
+
+def evaluate_with_alphabeta(game, color, depth=2):
+    player = AlphaBetaPlayer(color=color, depth=depth, prunning=True)
+    actions = game.state.playable_actions
+    if not actions:
+        return 0.0  # If no actions, no reward
+    best_action, value = player.alphabeta(game, depth, float("-inf"), float("inf"), time.time() + 2, None)
+    return value
+
+class AB_DQNPlayer_1(Player):
     def __init__(self, color):
         super().__init__(color)
         self.step = 0
@@ -176,7 +106,7 @@ class OnlineMCTSDQNPlayer_1(Player):
         rewards = []
 
         for action in playable_actions:
-            print("loop actions:", str(action))
+            #print("loop actions:", str(action))
             game_copy = game.copy()
             game_copy.execute(action)
             sample = create_sample_vector(game_copy, self.color)
@@ -186,10 +116,8 @@ class OnlineMCTSDQNPlayer_1(Player):
 
             if TRAIN:
                 # Reward is from MCTS estimate
-                print("eval action:", str(action))
-                counter = run_playouts(game_copy, NUM_PLAYOUTS)
-                mcts_labels = {k: v / NUM_PLAYOUTS for k, v in counter.items()}
-                reward = mcts_labels.get(self.color, 0)
+                #print("eval action:", str(action))
+                reward = evaluate_with_alphabeta(game_copy, self.color, depth=2)
                 rewards.append(reward)
                 # Store (sample, reward, next_sample) for Bellman update
                 self.replay_buffer.append((sample, reward, None))  # next_sample will be filled below
@@ -203,10 +131,10 @@ class OnlineMCTSDQNPlayer_1(Player):
         # Epsilon-greedy action selection
         if TRAIN and random.random() < EPSILON:
             chosen_idx = random.randint(0, len(playable_actions) - 1)
-            print("Exploration")
+            #print("Exploration")
         else:
             chosen_idx = np.argmax(rewards)
-            print("Exploitation")
+            #print("Exploitation")
 
         if TRAIN:
             # Fill in next_sample for chosen action
@@ -220,13 +148,13 @@ class OnlineMCTSDQNPlayer_1(Player):
 
         self.step += 1
         duration = time.time() - start
-        print(f"Eval took: {duration}.")
+        #print(f"Eval took: {duration}.")
         print("selected action: ", str(actions[chosen_idx]))
         return actions[chosen_idx]
     
 
     def update_model_and_flush_samples(self):
-        print("update_model_and_flush_samples")
+        #print("update_model_and_flush_samples")
 
         if len(self.replay_buffer) < MIN_REPLAY_BUFFER_LENGTH:
             return
