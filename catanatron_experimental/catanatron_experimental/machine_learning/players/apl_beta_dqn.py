@@ -97,7 +97,7 @@ class AB_DQNPlayer_1(Player):
     def decide(self, game: Game, playable_actions):
         start = time.time()
         if len(playable_actions) == 1:
-            print("only action")
+            # print("only action")
             return playable_actions[0]
 
         samples = []
@@ -118,6 +118,7 @@ class AB_DQNPlayer_1(Player):
                 # Reward is from MCTS estimate
                 #print("eval action:", str(action))
                 reward = evaluate_with_alphabeta(game_copy, self.color, depth=2)
+                reward = np.clip(reward, -10, 10)
                 rewards.append(reward)
                 # Store (sample, reward, next_sample) for Bellman update
                 self.replay_buffer.append((sample, reward, None))  # next_sample will be filled below
@@ -149,7 +150,7 @@ class AB_DQNPlayer_1(Player):
         self.step += 1
         duration = time.time() - start
         #print(f"Eval took: {duration}.")
-        print("selected action: ", str(actions[chosen_idx]))
+        # print("selected action: ", str(actions[chosen_idx]))
         return actions[chosen_idx]
     
 
@@ -173,7 +174,7 @@ class AB_DQNPlayer_1(Player):
                     next_qs.append(0.0)
                 else:
                     ns_tensor = torch.tensor(ns, dtype=torch.float32).unsqueeze(0).to(self.device)
-                    q_val = self.model(ns_tensor).max(dim=1)[0].item()
+                    q_val = self.model(ns_tensor).item()
                     next_qs.append(q_val)
             next_q_tensor = torch.tensor(next_qs, dtype=torch.float32).unsqueeze(1).to(self.device)
 
@@ -187,7 +188,7 @@ class AB_DQNPlayer_1(Player):
         self.model.train()
         self.optimizer.zero_grad()
         loss.backward()
-        self.optimizer.step()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
 
         if OVERWRITE_MODEL:
             torch.save(self.model.state_dict(), MODEL_PATH + ".pt")
