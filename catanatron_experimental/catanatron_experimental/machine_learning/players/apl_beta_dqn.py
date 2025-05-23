@@ -43,6 +43,7 @@ MODEL_NAME = "AB-dqn-4.0"
 MODEL_PATH = str(Path("data/models/", MODEL_NAME))
 MODEL_SINGLETON = None
 DATA_LOGGER = DataLogger(DATA_PATH)
+import pickle
 
 
 
@@ -75,16 +76,14 @@ def get_model_and_epsilon(device):
             checkpoint = torch.load(MODEL_PATH + ".pt", map_location=device)
             model.load_state_dict(checkpoint['model_state_dict'])
             epsilon = checkpoint.get('epsilon', 1.0)
-            print(f"✅ Loaded model with epsilon = {epsilon:.4f}")
+            print(f"Loaded model with epsilon = {epsilon:.4f}")
         else:
-            print("⚠️ No saved model found. Starting fresh.")
+            print("No saved model found. Starting fresh.")
 
         MODEL_SINGLETON = (model, epsilon)
 
     return MODEL_SINGLETON
 
-
-EPSILON = 0.5
 GAMMA = 0.99  # Discount factor
 
 
@@ -107,7 +106,12 @@ class AB_DQNPlayer_1(Player):
         self.model, self.epsilon = get_model_and_epsilon(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
         self.loss_fn = nn.MSELoss()
-        self.replay_buffer = deque(maxlen=5000)  # store (s, r, s') transitions
+        if os.path.exists("replay_buffer.pkl"):
+            with open("replay_buffer.pkl", "rb") as f:
+                self.replay_buffer = pickle.load(f)
+            print(f"Loaded replay buffer with {len(self.replay_buffer)} transitions")
+        else:
+            self.replay_buffer = deque(maxlen=5000) # store (s, r, s') transitions
 
     def decide(self, game: Game, playable_actions):
         start = time.time()
@@ -209,9 +213,15 @@ class AB_DQNPlayer_1(Player):
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
 
         if OVERWRITE_MODEL:
+            # Save model and epsilon
             torch.save({
                 'model_state_dict': self.model.state_dict(),
                 'epsilon': self.epsilon
             }, MODEL_PATH + ".pt")
 
-        print(f"Trained DQN model with loss: {loss.item():.4f}")
+            # Save replay buffer to disk
+            with open("replay_buffer.pkl", "wb") as f:
+                pickle.dump(self.replay_buffer, f)
+            #print(f"Saved replay buffer with {len(self.replay_buffer)} transitions.")
+
+        #print(f"Trained DQN model with loss: {loss.item():.4f}")

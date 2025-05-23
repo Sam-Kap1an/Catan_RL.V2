@@ -106,12 +106,25 @@ def create_combined_input(game, color, features=None):
 
 MODEL_SINGLETON = None
 
-def get_model():
+
+def get_model_and_epsilon(device):
     global MODEL_SINGLETON
     if MODEL_SINGLETON is None:
-        model = MMQNetwork(input_dim=NUM_FEATURES, action_dim=1) 
-        MODEL_SINGLETON = model
+        model = QNetwork(input_dim=NUM_FEATURES, action_dim=1).to(device)
+        epsilon = 1.0  # default starting value
+
+        if os.path.exists(MODEL_PATH + ".pt"):
+            checkpoint = torch.load(MODEL_PATH + ".pt", map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            epsilon = checkpoint.get('epsilon', 1.0)
+            print(f"Loaded model with epsilon = {epsilon:.4f}")
+        else:
+            print("No saved model found. Starting fresh.")
+
+        MODEL_SINGLETON = (model, epsilon)
+
     return MODEL_SINGLETON
+
 
 EPSILON = 0.1
 GAMMA = 0.99  # Discount factor
@@ -130,10 +143,12 @@ def evaluate_with_alphabeta(game, color, depth=2):
 class MM_DQNPlayer_1(Player):
     def __init__(self, color):
         super().__init__(color)
+        self.epsilon_min = 0.05
+        self.epsilon_decay = 0.995
         self.step = 0
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = get_model().to(self.device)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
+        self.model, self.epsilon = get_model_and_epsilon(self.device)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
         self.loss_fn = nn.MSELoss()
         self.replay_buffer = deque(maxlen=5000)  # store (s, r, s') transitions
 
@@ -152,7 +167,7 @@ class MM_DQNPlayer_1(Player):
             #print("loop actions:", str(action))
             game_copy = game.copy()
             game_copy.execute(action)
-            sample = create_combined_input(game_copy, self.color)
+            sample = create_sample_vector(game_copy, self.color)
             samples.append(sample)
             next_states.append(game_copy)
             actions.append(action)
@@ -161,6 +176,7 @@ class MM_DQNPlayer_1(Player):
                 # Reward is from MCTS estimate
                 #print("eval action:", str(action))
                 reward = evaluate_with_alphabeta(game_copy, self.color, depth=2)
+                reward = np.clip(reward, -10, 10)
                 rewards.append(reward)
                 # Store (sample, reward, next_sample) for Bellman update
                 self.replay_buffer.append((sample, reward, None))  # next_sample will be filled below
@@ -172,17 +188,20 @@ class MM_DQNPlayer_1(Player):
                 rewards.append(q_value)
 
         # Epsilon-greedy action selection
-        if TRAIN and random.random() < EPSILON:
+        if TRAIN and random.random() < self.epsilon:
             chosen_idx = random.randint(0, len(playable_actions) - 1)
-            #print("Exploration")
         else:
             chosen_idx = np.argmax(rewards)
-            #print("Exploitation")
+
+        # Decay epsilon over time
+        if TRAIN:
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+
 
         if TRAIN:
             # Fill in next_sample for chosen action
             chosen_game = next_states[chosen_idx]
-            next_sample = create_combined_input(chosen_game, self.color)
+            next_sample = create_sample_vector(chosen_game, self.color)
             # Update last appended (sample, reward, None) with next_sample
             self.replay_buffer[-1] = (samples[chosen_idx], rewards[chosen_idx], next_sample)
 
@@ -216,7 +235,7 @@ class MM_DQNPlayer_1(Player):
                     next_qs.append(0.0)
                 else:
                     ns_tensor = torch.tensor(ns, dtype=torch.float32).unsqueeze(0).to(self.device)
-                    q_val = self.model(ns_tensor).max(dim=1)[0].item()
+                    q_val = self.model(ns_tensor).item()
                     next_qs.append(q_val)
             next_q_tensor = torch.tensor(next_qs, dtype=torch.float32).unsqueeze(1).to(self.device)
 
@@ -230,9 +249,12 @@ class MM_DQNPlayer_1(Player):
         self.model.train()
         self.optimizer.zero_grad()
         loss.backward()
-        self.optimizer.step()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
 
         if OVERWRITE_MODEL:
-            torch.save(self.model.state_dict(), MODEL_PATH + ".pt")
+            torch.save({
+                'model_state_dict': self.model.state_dict(),
+                'epsilon': self.epsilon
+            }, MODEL_PATH + ".pt")
 
-        print(f"Trained DQN model with loss: {loss.item():.4f}")
+       # print(f"Trained DQN model with loss: {loss.item():.4f}")
