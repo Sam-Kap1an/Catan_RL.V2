@@ -4,6 +4,7 @@ import os
 import random
 import time
 from pathlib import Path
+import copy
 
 import pandas as pd
 import numpy as np
@@ -55,13 +56,19 @@ class QNetwork(nn.Module):
     def __init__(self, input_dim, action_dim, hidden_dim=128):
         super(QNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.bn1 = nn.BatchNorm1d(hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.fc_action = nn.Linear(hidden_dim, action_dim)
+        nn.init.uniform_(self.fc_action.weight, -0.01, 0.01)
+        nn.init.zeros_(self.fc_action.bias)
+
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))
+        x = self.fc1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
         x = F.relu(self.fc2(x))
-        q_values = self.fc_action(x)
+        q_values = torch.tanh(self.fc_action(x)) * 10
         return q_values
 
 MODEL_SINGLETON = None
@@ -95,17 +102,25 @@ def evaluate_with_alphabeta(game, color, depth=2):
     best_action, value = player.alphabeta(game, depth, float("-inf"), float("inf"), time.time() + 2, None)
     return value
 
+
 class AB_DQNPlayer_1(Player):
     def __init__(self, color):
         super().__init__(color)
-        self.epsilon = 1.0  # start with pure exploration
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.epsilon = 1.0
         self.epsilon_min = 0.05
         self.epsilon_decay = 0.995
         self.step = 0
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.update_target_steps = 100
         self.model, self.epsilon = get_model_and_epsilon(self.device)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
+        self.target_model = copy.deepcopy(self.model)  # Clone the main model
+        self.target_model.eval()  # Target is not trained directly
+
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
         self.loss_fn = nn.MSELoss()
+
         if os.path.exists("replay_buffer.pkl"):
             with open("replay_buffer.pkl", "rb") as f:
                 self.replay_buffer = pickle.load(f)
@@ -137,7 +152,7 @@ class AB_DQNPlayer_1(Player):
                 # Reward is from MCTS estimate
                 #print("eval action:", str(action))
                 reward = evaluate_with_alphabeta(game_copy, self.color, depth=2)
-                reward = np.clip(reward, -10, 10)
+                reward = np.tanh(reward / 10.0) * 10
                 rewards.append(reward)
                 # Store (sample, reward, next_sample) for Bellman update
                 self.replay_buffer.append((sample, reward, None))  # next_sample will be filled below
@@ -196,7 +211,9 @@ class AB_DQNPlayer_1(Player):
                     next_qs.append(0.0)
                 else:
                     ns_tensor = torch.tensor(ns, dtype=torch.float32).unsqueeze(0).to(self.device)
-                    q_val = self.model(ns_tensor).item()
+                    q_val = self.target_model(ns_tensor).item()
+                    q_val = np.clip(q_val, -100, 100) 
+
                     next_qs.append(q_val)
             next_q_tensor = torch.tensor(next_qs, dtype=torch.float32).unsqueeze(1).to(self.device)
 
@@ -204,7 +221,7 @@ class AB_DQNPlayer_1(Player):
 
         # Current predictions
         preds = self.model(state_tensor)
-
+        
         loss = self.loss_fn(preds, targets)
 
         self.model.train()
@@ -223,5 +240,8 @@ class AB_DQNPlayer_1(Player):
             with open("replay_buffer.pkl", "wb") as f:
                 pickle.dump(self.replay_buffer, f)
             #print(f"Saved replay buffer with {len(self.replay_buffer)} transitions.")
+        if self.step % self.update_target_steps == 0:
+            self.target_model.load_state_dict(self.model.state_dict())
 
-        #print(f"Trained DQN model with loss: {loss.item():.4f}")
+        print(f"Trained DQN model with loss: {loss.item():.4f}")
+        print(f"Avg pred: {preds.mean().item():.4f}, Avg target: {targets.mean().item():.4f}")
