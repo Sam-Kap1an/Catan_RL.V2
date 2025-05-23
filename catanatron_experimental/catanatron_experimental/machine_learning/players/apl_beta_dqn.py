@@ -65,14 +65,26 @@ class QNetwork(nn.Module):
 
 MODEL_SINGLETON = None
 
-def get_model():
+def get_model_and_epsilon(device):
     global MODEL_SINGLETON
     if MODEL_SINGLETON is None:
-        model = QNetwork(input_dim=NUM_FEATURES, action_dim=1) 
-        MODEL_SINGLETON = model
+        model = QNetwork(input_dim=NUM_FEATURES, action_dim=1).to(device)
+        epsilon = 1.0  # default starting value
+
+        if os.path.exists(MODEL_PATH + ".pt"):
+            checkpoint = torch.load(MODEL_PATH + ".pt", map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            epsilon = checkpoint.get('epsilon', 1.0)
+            print(f"✅ Loaded model with epsilon = {epsilon:.4f}")
+        else:
+            print("⚠️ No saved model found. Starting fresh.")
+
+        MODEL_SINGLETON = (model, epsilon)
+
     return MODEL_SINGLETON
 
-EPSILON = 0.1
+
+EPSILON = 0.5
 GAMMA = 0.99  # Discount factor
 
 
@@ -87,10 +99,13 @@ def evaluate_with_alphabeta(game, color, depth=2):
 class AB_DQNPlayer_1(Player):
     def __init__(self, color):
         super().__init__(color)
+        self.epsilon = 1.0  # start with pure exploration
+        self.epsilon_min = 0.05
+        self.epsilon_decay = 0.995
         self.step = 0
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = get_model().to(self.device)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
+        self.model, self.epsilon = get_model_and_epsilon(self.device)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
         self.loss_fn = nn.MSELoss()
         self.replay_buffer = deque(maxlen=5000)  # store (s, r, s') transitions
 
@@ -130,12 +145,15 @@ class AB_DQNPlayer_1(Player):
                 rewards.append(q_value)
 
         # Epsilon-greedy action selection
-        if TRAIN and random.random() < EPSILON:
+        if TRAIN and random.random() < self.epsilon:
             chosen_idx = random.randint(0, len(playable_actions) - 1)
-            #print("Exploration")
         else:
             chosen_idx = np.argmax(rewards)
-            #print("Exploitation")
+
+        # Decay epsilon over time
+        if TRAIN:
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+
 
         if TRAIN:
             # Fill in next_sample for chosen action
@@ -191,6 +209,9 @@ class AB_DQNPlayer_1(Player):
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
 
         if OVERWRITE_MODEL:
-            torch.save(self.model.state_dict(), MODEL_PATH + ".pt")
+            torch.save({
+                'model_state_dict': self.model.state_dict(),
+                'epsilon': self.epsilon
+            }, MODEL_PATH + ".pt")
 
         print(f"Trained DQN model with loss: {loss.item():.4f}")
