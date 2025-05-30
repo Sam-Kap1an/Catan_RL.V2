@@ -176,7 +176,7 @@ class AB_DQNPlayer_1(Player):
         return actions[chosen_idx]
 
     def update_model_and_flush_samples(self):
-        if len(self.replay_buffer) < MIN_REPLAY_BUFFER_LENGTH:
+        if len(self.replay_buffer) <  max(MIN_REPLAY_BUFFER_LENGTH, BATCH_SIZE):
             return
 
         batch = random.sample(self.replay_buffer, BATCH_SIZE)
