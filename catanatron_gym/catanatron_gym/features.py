@@ -539,16 +539,6 @@ def get_feature_ordering(
     return sorted(sample.keys())
 
 
-def create_sample(game, p0_color):
-    record_multichannel= {}
-    record_player_vector = {}
-
-    for extractor in board_feat:
-        record.update(extractor(game, p0_color))
-    return record
-
-
-
 def get_feature_ordering_multimodal(
     num_players=4, map_type: Literal["BASE", "MINI", "TOURNAMENT"] = "BASE"
 ):

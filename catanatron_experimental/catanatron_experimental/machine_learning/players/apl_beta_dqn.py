@@ -27,7 +27,7 @@ import torch.nn.functional as F
 NUM_FEATURES = len(get_feature_ordering())
 NUM_PLAYOUTS = 100
 MIN_REPLAY_BUFFER_LENGTH = 100
-BATCH_SIZE = 64
+BATCH_SIZE = 256
 FLUSH_EVERY = 1
 TRAIN = True
 OVERWRITE_MODEL = True
@@ -105,7 +105,7 @@ class AB_DQNPlayer_1(Player):
         self.target_model.eval()
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
-        self.loss_fn = nn.MSELoss()
+        self.loss_fn = nn.SmoothL1Loss()
         self.lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.95)
 
         # Load or initialize replay buffer
@@ -140,9 +140,25 @@ class AB_DQNPlayer_1(Player):
                     q_value = self.model(tensor_input).item()
                 rewards.append(q_value)
 
+
+        # ===== Hybrid Exploration Strategy =====
+        e_total = self.epsilon
+        e_random = e_total * 0.5       # 50% of e goes to random
+        e_alpha = e_total * 0.5        # 50% of e goes to AlphaBeta
+        r = random.random()
+
+        
         # Epsilon-greedy action selection
-        if TRAIN and random.random() < self.epsilon:
-            chosen_idx = random.randint(0, len(playable_actions) - 1)
+        if TRAIN:
+            if r < e_random:
+                chosen_idx = random.randint(0, len(playable_actions) - 1)
+            elif r < e_random + e_alpha:
+                # Use AlphaBeta to pick the best action
+                best_action, _ = AlphaBetaPlayer(self.color, depth=2, prunning=True).alphabeta(
+                    game, 2, float("-inf"), float("inf"), time.time() + 1.5, None)
+                chosen_idx = actions.index(best_action) if best_action in actions else random.randint(0, len(actions)-1)
+            else:
+                chosen_idx = np.argmax(rewards)
         else:
             chosen_idx = np.argmax(rewards)
 
