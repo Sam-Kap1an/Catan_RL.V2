@@ -22,6 +22,11 @@ import pickle
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from catanatron.state_functions import (
+    player_key,
+    player_num_dev_cards,
+    player_num_resource_cards,
+)
 
 # ===== Configuration =====
 NUM_FEATURES = len(get_feature_ordering())
@@ -85,6 +90,44 @@ def evaluate_with_alphabeta(game, color, depth=2):
     best_action, value = player.alphabeta(game, depth, float("-inf"), float("inf"), time.time() + 2, None)
     return value
 
+
+
+def evaluate_simple_score(game, color):
+    """Composite reward:
+    = 1.0 * VP
+    + 0.1 * resources
+    + 0.3 * dev cards
+    + 1.5 * settlements
+    + 2.5 * cities
+    + 0.2 * tanh(alpha_beta_value)
+    """
+    key = player_key(game.state, color)
+
+    # === Core Player Stats
+    vps = game.state.player_state[key + "_VICTORY_POINTS"]
+    num_resources = player_num_resource_cards(game.state, color)
+    num_dev_cards = player_num_dev_cards(game.state, color)
+
+    # === Buildings
+    num_settlements = len(game.state.buildings_by_color[color][SETTLEMENT])
+    num_cities = len(game.state.buildings_by_color[color][CITY])
+
+    # === Alpha-Beta Heuristic
+    alpha_val = evaluate_with_alphabeta(game, color, depth=2)
+    alpha_val_scaled = np.tanh(alpha_val / 10.0)  # Scale to [-1, 1]
+
+    # === Final Reward (Tunable Weights)
+    reward = (
+        1.0 * vps +
+        0.1 * num_resources +
+        0.3 * num_dev_cards +
+        1.5 * num_settlements +
+        2.5 * num_cities +
+        0.2 * alpha_val_scaled
+    )
+
+    return reward
+
 # ===== DQN Player Implementation =====
 class AB_DQNPlayer_1(Player):
     def __init__(self, color):
@@ -131,7 +174,7 @@ class AB_DQNPlayer_1(Player):
             actions.append(action)
 
             if TRAIN:
-                reward = np.tanh(evaluate_with_alphabeta(game_copy, self.color, depth=2) / 10.0) * 10
+                reward = np.tanh(evaluate_simple_score(game_copy, self.color) / 10.0) * 10
                 rewards.append(reward)
                 self.replay_buffer.append((sample, reward, None))
             else:
@@ -150,13 +193,18 @@ class AB_DQNPlayer_1(Player):
         
         # Epsilon-greedy action selection
         if TRAIN:
-            if r < e_random:
+            # if r < e_random:
+            #     chosen_idx = random.randint(0, len(playable_actions) - 1)
+            # elif r < e_random + e_alpha:
+            #     # Use AlphaBeta to pick the best action
+            #     best_action, _ = AlphaBetaPlayer(self.color, depth=2, prunning=True).alphabeta(
+            #         game, 2, float("-inf"), float("inf"), time.time() + 1.5, None)
+            #     chosen_idx = actions.index(best_action) if best_action in actions else random.randint(0, len(actions)-1)
+            # else:
+            #     chosen_idx = np.argmax(rewards)
+
+            if r < e_total:
                 chosen_idx = random.randint(0, len(playable_actions) - 1)
-            elif r < e_random + e_alpha:
-                # Use AlphaBeta to pick the best action
-                best_action, _ = AlphaBetaPlayer(self.color, depth=2, prunning=True).alphabeta(
-                    game, 2, float("-inf"), float("inf"), time.time() + 1.5, None)
-                chosen_idx = actions.index(best_action) if best_action in actions else random.randint(0, len(actions)-1)
             else:
                 chosen_idx = np.argmax(rewards)
         else:
